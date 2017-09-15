@@ -4,7 +4,6 @@ import fs2._
 import cats.effect.Sync
 import scodec.Attempt.{Failure, Successful}
 import scodec.bits.ByteVector
-import spinoco.fs2.interop.scodec.ByteVectorChunk
 import spinoco.protocol.http.header.value.{ContentType, HttpCharset, MediaType}
 
 
@@ -42,7 +41,7 @@ object StreamBodyEncoder {
 
   /** encoder that encodes ByteVector as they come in, with `application/octet-stream` content type **/
   def byteVectorEncoder[F[_]] : StreamBodyEncoder[F, ByteVector] =
-    StreamBodyEncoder(ContentType(MediaType.`application/octet-stream`, None, None)) { _.flatMap { bv => Stream.chunk(ByteVectorChunk(bv)) } }
+    StreamBodyEncoder(ContentType(MediaType.`application/octet-stream`, None, None)) { _.flatMap { bv => Stream.emits(bv.toSeq) } }
 
   /** encoder that encodes utf8 string, with `text/plain` utf8 content type **/
   def utf8StringEncoder[F[_]](implicit F: Sync[F]) : StreamBodyEncoder[F, String] =
@@ -58,7 +57,7 @@ object StreamBodyEncoder {
     StreamBodyEncoder(E.contentType) { _.flatMap { a =>
       E.encode(a) match {
         case Failure(err) => Stream.fail(new Throwable(s"Failed to encode: $err ($a)"))
-        case Successful(bytes) => Stream.chunk(ByteVectorChunk(bytes))
+        case Successful(bytes) => Stream.emits(bytes.toSeq)
       }
     }}
 

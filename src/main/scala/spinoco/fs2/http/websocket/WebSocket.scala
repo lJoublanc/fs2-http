@@ -12,14 +12,13 @@ import scodec.Attempt.{Failure, Successful}
 import scodec.bits.ByteVector
 import scodec.{Codec, Decoder, Encoder}
 import spinoco.fs2.http.HttpResponse
-import spinoco.fs2.interop.scodec.ByteVectorChunk
 import spinoco.protocol.http.codec.{HttpRequestHeaderCodec, HttpResponseHeaderCodec}
 import spinoco.protocol.http.header._
 import spinoco.protocol.http._
 import spinoco.protocol.http.header.value.{ContentType, HttpCharset, MediaType, ProductDescription}
 import spinoco.protocol.websocket.{OpCode, WebSocketFrame}
 import spinoco.protocol.websocket.codec.WebSocketFrameCodec
-import spinoco.fs2.http.util.chunk2ByteVector
+import spinoco.fs2.http.util.{chunk2ByteVector,byteVector2Chunk}
 
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
@@ -115,7 +114,7 @@ object WebSocket {
       requestCodec.encode(header) match {
         case Failure(err) => Stream.fail(new Throwable(s"Failed to encode websocket request: $err"))
         case Successful(headerBits) =>
-          eval(socket.write(ByteVectorChunk(headerBits.bytes ++ `\r\n\r\n`))).flatMap { _ =>
+          eval(socket.write(byteVector2Chunk(headerBits.bytes ++ `\r\n\r\n`))).flatMap { _ =>
             socket.reads(receiveBufferSize) through httpHeaderAndBody(maxHeaderSize) flatMap { case (respHeaderBytes, body) =>
               responseCodec.decodeValue(respHeaderBytes.bits) match {
                 case Failure(err) => fail(new Throwable(s"Failed to decode websocket response: $err"))
@@ -156,7 +155,7 @@ object WebSocket {
              `Content-Type`(ContentType(MediaType.`text/plain`, Some(HttpCharset.`UTF-8`), None))
           )
         )
-        , body = Stream.chunk(ByteVectorChunk(ByteVector.view(s.getBytes)))
+        , body = Stream.chunk(byteVector2Chunk(ByteVector.view(s.getBytes)))
       )
 
       def version: Either[HttpResponse[F], Int] = header.headers.collectFirst {
@@ -390,7 +389,7 @@ object WebSocket {
       _.append(Stream.emit(closeFrame)).flatMap { wsf =>
         WebSocketFrameCodec.codec.encode(wsf) match {
           case Failure(err) => Stream.fail(new Throwable(s"Failed to encode websocket frame: $err (frame: $wsf)"))
-          case Successful(data) => Stream.chunk(ByteVectorChunk(data.bytes))
+          case Successful(data) => Stream.chunk(byteVector2Chunk(data.bytes))
         }
       }
     }

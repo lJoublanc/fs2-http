@@ -6,7 +6,6 @@ import fs2.{Stream, _}
 import scodec.Attempt.{Failure, Successful}
 import scodec.{Attempt, Codec, Err}
 import spinoco.fs2.http.body.{BodyDecoder, BodyEncoder, StreamBodyEncoder}
-import spinoco.fs2.interop.scodec.ByteVectorChunk
 import spinoco.protocol.http._
 import header._
 import header.value.{ContentType, MediaType}
@@ -53,7 +52,7 @@ sealed trait HttpRequestOrResponse[F[_]] { self =>
             List(`Content-Type`(W.contentType), `Content-Length`(bytes.size))
         }
 
-        updateBody(Stream.chunk(ByteVectorChunk(bytes)))
+        updateBody(Stream.emits(bytes.toSeq))
         .updateHeaders(headers)
         .asInstanceOf[Self]
     }
@@ -251,7 +250,7 @@ object HttpRequest {
           if (request.bodyIsChunked)  request.body through ChunkedEncoding.encode
           else request.body
 
-        Stream.chunk[Byte](ByteVectorChunk(bits.bytes ++ `\r\n\r\n`)) ++ body
+        Stream.emits((bits.bytes ++ `\r\n\r\n`).toSeq) ++ body
     }
   }
 
@@ -336,7 +335,7 @@ object HttpResponse {
           if (bodyIsChunked(response.header.headers)) response.body through ChunkedEncoding.encode
           else response.body
 
-        Stream.chunk[Byte](ByteVectorChunk(encoded.bytes ++ `\r\n\r\n`)) ++ body
+        Stream.emits((encoded.bytes ++ `\r\n\r\n`).toSeq) ++ body
     }
 
   }

@@ -9,7 +9,6 @@ import fs2.io.tcp.Socket
 import fs2.{Stream, _}
 import cats.effect.{Async,Effect}
 import scodec.bits.ByteVector
-import spinoco.fs2.interop.scodec.ByteVectorChunk
 import spinoco.fs2.interop.ssl.SSLEngine
 import spinoco.fs2.interop.ssl.tcp.SSLSocket
 import spinoco.protocol.http.{HostPort, HttpScheme}
@@ -59,7 +58,7 @@ package object internal {
           else {
             val (h, t) = all.splitAt(idx)
             if (h.size > maxHeaderSize)  Pull.fail(new Throwable(s"Size of the header exceeded the limit of $maxHeaderSize (${all.size})"))
-            else Pull.output1((h, Stream.chunk(ByteVectorChunk(t.drop(`\r\n\r\n`.size))) ++ next))
+            else Pull.output1((h, Stream.emits(t.drop(`\r\n\r\n`.size).toSeq) ++ next))
           }
       }
     }

@@ -3,7 +3,6 @@ package spinoco.fs2.http.sse
 import fs2._
 import scodec.Attempt
 import scodec.bits.ByteVector
-import spinoco.fs2.interop.scodec.ByteVectorChunk
 import spinoco.fs2.http.util.chunk2ByteVector
 
 import scala.util.Try
@@ -23,14 +22,14 @@ object SSEEncoding {
         val eventBytes = event.map { s => s"event: $s" }.toSeq
         val dataBytes = data.map { s => s"data: $s" }
         val idBytes = id.map { s => s"id: $s" }.toSeq
-        Stream.chunk(ByteVectorChunk(ByteVector.view((
+        Stream.emits(ByteVector.view((
           eventBytes ++ dataBytes ++ idBytes).mkString("", "\n", "\n\n").getBytes
-        )))
+        ).toSeq)
 
       case SSEMessage.SSERetry(duration) =>
-        Stream.chunk(ByteVectorChunk(ByteVector.view(
+        Stream.emits(ByteVector.view(
           s"retry: ${duration.toMillis}\n\n".getBytes
-        )))
+        ).toSeq)
     }
   }
 

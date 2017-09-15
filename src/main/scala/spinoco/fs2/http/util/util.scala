@@ -3,7 +3,6 @@ package spinoco.fs2.http
 import fs2._
 import scodec.bits.{BitVector, ByteVector}
 import scodec.bits.Bases.{Alphabets, Base64Alphabet}
-import spinoco.fs2.interop.scodec.ByteVectorChunk
 
 package object util {
 
@@ -19,7 +18,7 @@ package object util {
       _.pull.unconsChunk.flatMap {
         case None =>
           if (rem.size == 0) Pull.done
-          else Pull.output(ByteVectorChunk(ByteVector.view(rem.toBase64(alphabet).getBytes)))
+          else Pull.output(byteVector2Chunk(ByteVector.view(rem.toBase64(alphabet).getBytes)))
 
         case Some((chunk, h)) =>
           val n = rem ++ chunk2ByteVector(chunk)
@@ -33,7 +32,7 @@ package object util {
               out(pos) = alphabet.toChar(idx).toByte
               pos = pos + 1
             }
-            Pull.output(ByteVectorChunk(ByteVector.view(out))) >> go(n.takeRight(pad))(h)
+            Pull.output(Chunk array out) >> go(n.takeRight(pad))(h)
           } else {
             go(n)(h)
           }
@@ -83,8 +82,8 @@ package object util {
             if (aligned <= 0 && !term) go(acc)(h)
             else {
               val (out, rem) = acc.splitAt(aligned)
-              if (term) Pull.output(ByteVectorChunk(out.toByteVector))
-              else Pull.output(ByteVectorChunk(out.toByteVector)) >> go(rem)(h)
+              if (term) Pull.output(byteVector2Chunk(out.toByteVector))
+              else Pull.output(byteVector2Chunk(out.toByteVector)) >> go(rem)(h)
             }
 
           } catch {
@@ -106,17 +105,12 @@ package object util {
 
   /** converts chunk of bytes to ByteVector **/
   def chunk2ByteVector(chunk: Chunk[Byte]):ByteVector = {
-    chunk match  {
-      case bv: ByteVectorChunk => bv.toByteVector
-      case other =>
-        val bs = other.toBytes
-        ByteVector(bs.values, bs.offset, bs.size)
-    }
+    val bs = chunk.toBytes
+    ByteVector(bs.values, bs.offset, bs.size)
   }
 
   /** converts ByteVector to chunk **/
-  def byteVector2Chunk(bv: ByteVector): Chunk[Byte] = {
-    ByteVectorChunk(bv)
-  }
+  def byteVector2Chunk(bv: ByteVector): Chunk[Byte] = 
+    Chunk seq bv.toSeq
 
 }
