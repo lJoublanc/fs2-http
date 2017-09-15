@@ -39,7 +39,7 @@ package object http {
      , requestHeaderReceiveTimeout: Duration = 5.seconds
      , requestCodec: Codec[HttpRequestHeader] = HttpRequestHeaderCodec.defaultCodec
      , responseCodec: Codec[HttpResponseHeader] = HttpResponseHeaderCodec.defaultCodec
-     , requestFailure : Throwable => Stream[F, HttpResponse[F]] = HttpServer.handleRequestParseError _
+     , requestFailure : Throwable => Stream[F, HttpResponse[F]] = HttpServer.handleRequestParseError[F] _
      , sendFailure: (Option[HttpRequestHeader], HttpResponse[F], Throwable) => Stream[F, Nothing] = HttpServer.handleSendFailure[F] _
    )(
      service:  (HttpRequestHeader, Stream[F,Byte]) => Stream[F,HttpResponse[F]]

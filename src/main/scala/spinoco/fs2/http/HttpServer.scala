@@ -84,10 +84,10 @@ object HttpServer {
   }
 
   /** default handler for parsing request errors **/
-  def handleRequestParseError(err: Throwable): Stream[Pure, HttpResponse[Nothing]] = { //FIXME : should this be Pure?
+  def handleRequestParseError[F[_]](err: Throwable): Stream[F, HttpResponse[F]] = {
     Stream.suspend {
       err.printStackTrace()
-      Stream.emit(HttpResponse[Nothing](HttpStatusCode.BadRequest))
+      Stream.emit(HttpResponse[F](HttpStatusCode.BadRequest))
     }
   }
 
