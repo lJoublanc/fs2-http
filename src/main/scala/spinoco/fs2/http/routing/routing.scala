@@ -1,7 +1,7 @@
 package spinoco.fs2.http
 
 import fs2._
-import fs2.util.{Async, Catchable, Lub1, Suspendable}
+import cats.effect.{Sync,Effect}
 import scodec.{Attempt, Decoder, Encoder}
 import scodec.bits.Bases.Base64Alphabet
 import scodec.bits.{Bases, ByteVector}
@@ -15,6 +15,7 @@ import spinoco.fs2.http.util.chunk2ByteVector
 import spinoco.fs2.http.websocket.{Frame, WebSocket}
 
 import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext
 
 
 
@@ -26,7 +27,7 @@ package object routing {
 
 
   /** converts supplied route to function that is handled over to server to perform the routing **/
-  def route[F[_]](r:Route[F])(implicit F: Suspendable[F]):(HttpRequestHeader, Stream[F, Byte]) => Stream[F, HttpResponse[F]] = {
+  def route[F[_]](r:Route[F])(implicit F: Sync[F]):(HttpRequestHeader, Stream[F, Byte]) => Stream[F, HttpResponse[F]] = {
     (header, body) =>
       Stream.eval(Matcher.run[F, Stream[F, HttpResponse[F]]](r)(header, body)).flatMap { mr =>
         mr.fold((resp : HttpResponse[F]) => Stream.emit(resp), identity )
@@ -62,8 +63,8 @@ package object routing {
     def go(m: Matcher[F,A], next: Seq[Matcher[F, A]]): Matcher[F, A] = {
       next.headOption match {
         case None => m
-        case Some(nm) => m.flatMapR[F, F, A] {
-          case Success(a) => Matcher.success(a)
+        case Some(nm) => m.flatMapR {
+          case Success(a) => Matcher.success(a).covary[F]
           case f: Failed[F] => go(nm, next.tail)
         }
       }
@@ -105,12 +106,12 @@ package object routing {
   def paramBase64(key: String, alphabet: Base64Alphabet = Bases.Alphabets.Base64Url): Matcher[Nothing, ByteVector] =
     param[String](key).flatMap { s =>
       ByteVector.fromBase64(s, alphabet) match {
-        case None => Matcher.respondWith(HttpStatusCode.BadRequest)
+        case None => Matcher.respondWith(HttpStatusCode.BadRequest).covaryValue[ByteVector]
         case Some(bv) => Matcher.success(bv)
       }
-    }(Lub1.id[Nothing])
+    }
 
-  /** decodes head of the path to `A` givne supplied decoder from string **/
+  /** decodes head of the path to `A` given supplied decoder from string **/
   def as[A](implicit decoder: StringDecoder[A]): Matcher[Nothing, A] =
     Match[Nothing, A] { (request, _) =>
       request.path.segments.headOption.flatMap(decoder.decode) match {
@@ -137,8 +138,9 @@ package object routing {
   )(
     implicit R: Decoder[I]
     , W: Encoder[O]
-    , F: Async[F]
+    , F: Effect[F]
     , S: Scheduler
+    , EC : ExecutionContext
   ): Match[Nothing, (Pipe[F, Frame[I], Frame[O]]) => Stream[F, HttpResponse[F]]] =
     Match[Nothing, (Pipe[F, Frame[I], Frame[O]]) => Stream[F, HttpResponse[F]]] { (request, body) =>
       Success(
@@ -163,27 +165,25 @@ package object routing {
       */
     def bytes:  Matcher[F, Stream[F, Byte]] =
       header[`Content-Length`].?.flatMap { maybeSized =>
-        Match[F, Stream[F, Byte]] { (_, body) =>
+        Match[Nothing, Stream[F, Byte]] { (_, body) =>
           MatchResult.success(maybeSized.map(_.value).fold(body) { sz => body.take(sz) })
         }
-      }
-
-
+      }.covary[F]
 
     /** extracts body as stream of `A` **/
     def stream[A](implicit D: StreamBodyDecoder[F, A]):  Matcher[F, Stream[F, A]] =
-      header[`Content-Type`].flatMap { ct =>
+      header[`Content-Type`].covary[F].flatMap { ct =>
         bytes.flatMap { s =>
           D.decode(ct.value) match {
             case None => Matcher.ofResult(BadRequest)
-            case Some(decode) => Matcher.success(s through decode)
+            case Some(decode) => Matcher.success(s through decode).covary[F]
           }
         }
       }
 
     /** extracts last element of the `body` or responds BadRequest if body can't be extracted **/
-    def as[A](implicit D: BodyDecoder[A], F: Catchable[F]): Matcher[F, A] = {
-      header[`Content-Type`].flatMap { ct =>
+    def as[A](implicit D: BodyDecoder[A], F: Sync[F]): Matcher[F, A] = {
+      header[`Content-Type`].covary[F].flatMap { ct =>
         bytes.flatMap { s => eval {
           F.map(s.chunks.runLog) { chunks =>
             val bytes =
@@ -192,13 +192,10 @@ package object routing {
             D.decode(bytes, ct.value)
           }
         }}.flatMap {
-          case Attempt.Successful(a) => Matcher.success(a)
-          case Attempt.Failure(err) => Matcher.ofResult(BadRequest)
+          case Attempt.Successful(a) => Matcher.success(a).covary[F]
+          case Attempt.Failure(err) => Matcher.ofResult[F,A](BadRequest)
         }
       }
     }
   }
-
-
-
 }

@@ -5,7 +5,7 @@ import javax.net.ssl.SSLContext
 
 import fs2._
 import fs2.io.tcp.Socket
-import fs2.util.Async
+import cats.effect.Effect
 import scodec.{Codec, Decoder, Encoder}
 import spinoco.fs2.http.internal.{addressForRequest, liftToSecure, readWithTimeout}
 import spinoco.fs2.http.sse.{SSEDecoder, SSEEncoding}
@@ -15,6 +15,7 @@ import spinoco.protocol.http.header.value.MediaType
 import spinoco.protocol.http.{HttpRequestHeader, HttpResponseHeader}
 
 import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext
 
 
 trait HttpClient[F[_]] {
@@ -109,17 +110,17 @@ trait HttpClient[F[_]] {
      * Creates an Http Client
      * @param requestCodec    Codec used to decode request header
      * @param responseCodec   Codec used to encode response header
-     * @param sslStrategy     Strategy used when communication with SSL (https or wss)
+     * @param sslExecContext  Execution Context used for communication with SSL (https or wss)
      * @param sslContext      SSL Context to use with SSL Client (https, wss)
      */
   def apply[F[_]](
     requestCodec: Codec[HttpRequestHeader]
     , responseCodec: Codec[HttpResponseHeader]
-    , sslStrategy: => Strategy
+    , sslExecContext: => ExecutionContext
     , sslContext: => SSLContext
-  )(implicit AG: AsynchronousChannelGroup, F: Async[F]):F[HttpClient[F]] = F.delay {
+  )(implicit AG: AsynchronousChannelGroup, F: Effect[F], ioEC : ExecutionContext):F[HttpClient[F]] = F.delay {
     lazy val sslCtx = sslContext
-    lazy val sslS = sslStrategy
+    lazy val sslEC = sslExecContext
 
     new HttpClient[F] {
       def request(
@@ -132,9 +133,9 @@ trait HttpClient[F[_]] {
         io.tcp.client(address)
         .evalMap { socket =>
           if (!request.isSecure) F.pure(socket)
-          else liftToSecure(sslS, sslCtx)(socket)
+          else liftToSecure(sslEC, sslCtx)(socket)
         }
-        .flatMap { impl.request(request, chunkSize, maxResponseHeaderSize, timeout, requestCodec, responseCodec ) }}
+        .flatMap { impl.request(request, chunkSize, maxResponseHeaderSize, timeout, requestCodec, responseCodec )(_) }}
       }
 
       def websocket[I, O](
@@ -144,7 +145,7 @@ trait HttpClient[F[_]] {
         , chunkSize: Int
         , maxFrameSize: Int
       )(implicit R: Decoder[I], W: Encoder[O], S: Scheduler): Stream[F, Option[HttpResponseHeader]] =
-        WebSocket.client(request,pipe,maxResponseHeaderSize,chunkSize,maxFrameSize, requestCodec, responseCodec, sslS, sslCtx)
+        WebSocket.client(request,pipe,maxResponseHeaderSize,chunkSize,maxFrameSize, requestCodec, responseCodec, sslEC, sslCtx)
 
 
       def sse[A](rq: HttpRequest[F], maxResponseHeaderSize: Int, chunkSize: Int)(implicit D: SSEDecoder[A]): Stream[F, A] =
@@ -167,13 +168,13 @@ trait HttpClient[F[_]] {
       , timeout: Duration
       , requestCodec: Codec[HttpRequestHeader]
       , responseCodec: Codec[HttpResponseHeader]
-     )(socket: Socket[F])(implicit F: Async[F]): Stream[F, HttpResponse[F]] = {
+     )(socket: Socket[F])(implicit F: Effect[F]): Stream[F, HttpResponse[F]] = {
        import Stream._
        timeout match {
          case fin: FiniteDuration =>
            eval(F.delay(System.currentTimeMillis())).flatMap { start =>
            HttpRequest.toStream(request, requestCodec).to(socket.writes(Some(fin))).last.onFinalize(socket.endOfOutput).flatMap { _ =>
-           eval(async.signalOf[F, Boolean](true)).flatMap { timeoutSignal =>
+           eval(async.signalOf[F, Boolean](true)(F,???)).flatMap { timeoutSignal => //FIXME : get an exec context from somewhere.
            eval(F.delay(System.currentTimeMillis())).flatMap { sent =>
              val remains = fin - (sent - start).millis
              readWithTimeout(socket, remains, timeoutSignal.get, chunkSize)

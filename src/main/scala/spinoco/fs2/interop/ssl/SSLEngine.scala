@@ -6,11 +6,12 @@ import javax.net.ssl.SSLEngineResult
 import javax.net.{ssl => jns}
 
 import fs2._
-import fs2.util.Async.Ref
-import fs2.util._
-import fs2.util.syntax._
+import fs2.async.Ref
 
+import cats.effect.Effect
+import cats.syntax.all._
 
+import scala.concurrent.ExecutionContext
 
 /**
   * Helper to establish asynchronous interface around [[jns.SSLEngine]]
@@ -96,8 +97,8 @@ object SSLEngine {
     , appBufferSize: Int = 16*1024
   )(
     implicit
-    F: Async[F]
-    , S: Strategy
+    F: Effect[F]
+    , EC: ExecutionContext
   ): F[SSLEngine[F]] = {
 
     def mkWrapBuffers: (ByteBuffer, ByteBuffer) =  {
@@ -110,9 +111,8 @@ object SSLEngine {
         ByteBuffer.allocate(appBufferSize)
     }
 
-
-    F.refOf(mkWrapBuffers).flatMap  { wrapBuffers =>
-    F.refOf(mkUnWrapBuffers).map { unwrapBuffers =>
+    Ref.initialized(mkWrapBuffers).flatMap  { wrapBuffers =>
+    Ref.initialized(mkUnWrapBuffers).map { unwrapBuffers =>
 
       new SSLEngine[F] {
         def startHandshake: F[Unit] = F.delay {
@@ -161,7 +161,7 @@ object SSLEngine {
       * Note that apart of performing the wrap, this handles following:
       *
       * - acquires wrap lock
-      * - if the wrap resulted in NEED_TASK, then tha task i executed with supplied `S` strategy
+      * - if the wrap resulted in NEED_TASK, then that task is executed with supplied `EC` execution context
       * - If the buffer UNDER/OVERFLOW is signalled new destination buffer is allocated and returned
       *
       *
@@ -178,7 +178,7 @@ object SSLEngine {
       engine: jns.SSLEngine
       , bytes: Chunk[Byte]
       , buffers: Ref[F, (ByteBuffer, ByteBuffer)]
-    )(implicit F: Async[F], S: Strategy): F[Result] =
+    )(implicit F: Effect[F], EC: ExecutionContext): F[Result] =
       wrapUnwrap(engine,bytes,buffers)(EngineOpName.WRAP)
 
     /**
@@ -187,7 +187,7 @@ object SSLEngine {
       * Note that apart of performing the un-wrap, this handles following:
       *
       * - acquires un-wrap lock
-      * - if the un-wrap resulted in NEED_TASK, then tha task i executed with supplied `S` strategy
+      * - if the un-wrap resulted in NEED_TASK, then tha task i executed with supplied `EC` execution context
       * - If the buffer UNDERFLOW is returned then we memoize the bytes with signal received and request for more bytes to input
       * - If the buffer OVERFLOW
       *
@@ -205,7 +205,7 @@ object SSLEngine {
       engine: jns.SSLEngine
       , bytes: Chunk[Byte]
       , buffers: Ref[F, (ByteBuffer, ByteBuffer)]
-    )(implicit F: Async[F], S: Strategy): F[Result] =
+    )(implicit F: Effect[F], EC: ExecutionContext): F[Result] =
       wrapUnwrap(engine,bytes,buffers)(EngineOpName.UNWRAP)
 
 
@@ -216,7 +216,7 @@ object SSLEngine {
     , buffers: Ref[F, (ByteBuffer, ByteBuffer)]
     )(
       op: EngineOpName.Value
-    )(implicit F: Async[F], S: Strategy): F[Result] = {
+    )(implicit F: Effect[F], EC: ExecutionContext): F[Result] = {
       import  SSLEngineResult.Status._
       import SSLEngineResult.HandshakeStatus._
 
@@ -325,16 +325,14 @@ object SSLEngine {
 
 
     /** runs all available tasks , retruning when tasks has been finished **/
-    def runTasks[F[_]](engine: jns.SSLEngine)(implicit F: Async[F], S: Strategy):F[Unit] = {
+    def runTasks[F[_]](engine: jns.SSLEngine)(implicit F: Effect[F], EC: ExecutionContext):F[Unit] = {
       F.delay { Option(engine.getDelegatedTask) }.flatMap {
         case None => F.pure(())
         case Some(engineTask) =>
           F.async[Unit] { cb =>
-            F.delay { S {
-              try { engineTask.run(); cb(Right(())) }
-              catch { case t : Throwable => cb(Left(t))}
-            }}
-          } *> runTasks(engine)
+            try { engineTask.run(); cb(Right(())) }
+            catch { case t : Throwable => cb(Left(t))}
+          } >> runTasks(engine)
       }
     }
 

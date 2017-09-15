@@ -6,9 +6,8 @@ import javax.net.ssl.SSLContext
 
 import fs2.Stream._
 import fs2.io.tcp.Socket
-import fs2.util.Async
-import fs2.util.syntax._
 import fs2.{Stream, _}
+import cats.effect.{Async,Effect}
 import scodec.bits.ByteVector
 import spinoco.fs2.interop.scodec.ByteVectorChunk
 import spinoco.fs2.interop.ssl.SSLEngine
@@ -18,6 +17,7 @@ import spinoco.protocol.http.header.{HttpHeader, `Transfer-Encoding`}
 import spinoco.fs2.http.util.chunk2ByteVector
 
 import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext
 import scala.reflect.ClassTag
 
 
@@ -45,26 +45,26 @@ package object internal {
     * From the stream of bytes this extracts Http Header and body part.
     */
   def httpHeaderAndBody[F[_]](maxHeaderSize: Int): Pipe[F, Byte, (ByteVector, Stream[F, Byte])] = {
-    def go(self:Stream[F,Byte], buff: ByteVector): Stream[F, (ByteVector, Stream[F, Byte])] = {
-      self.scope.uncons.flatMap {
-        case None => Stream.fail(new Throwable(s"Incomplete Header received (sz = ${buff.size}): ${buff.decodeUtf8}"))
+    def go(self:Stream[F,Byte], buff: ByteVector): Pull[F, (ByteVector, Stream[F, Byte]), Unit] = {
+      self.pull.unconsChunk.flatMap {
+        case None => Pull.fail(new Throwable(s"Incomplete Header received (sz = ${buff.size}): ${buff.decodeUtf8}"))
         case Some((chunk, next)) =>
           val bv = chunk2ByteVector(chunk)
           val all = buff ++ bv
           val idx = all.indexOfSlice(`\r\n\r\n`)
           if (idx < 0) {
-            if (all.size > maxHeaderSize) Stream.fail(new Throwable(s"Size of the header exceeded the limit of $maxHeaderSize (${all.size})"))
+            if (all.size > maxHeaderSize) Pull.fail(new Throwable(s"Size of the header exceeded the limit of $maxHeaderSize (${all.size})"))
             else go(next, all)
           }
           else {
             val (h, t) = all.splitAt(idx)
-            if (h.size > maxHeaderSize)  Stream.fail(new Throwable(s"Size of the header exceeded the limit of $maxHeaderSize (${all.size})"))
-            else Stream.emit((h, Stream.chunk(ByteVectorChunk(t.drop(`\r\n\r\n`.size))) ++ next))
+            if (h.size > maxHeaderSize)  Pull.fail(new Throwable(s"Size of the header exceeded the limit of $maxHeaderSize (${all.size})"))
+            else Pull.output1((h, Stream.chunk(ByteVectorChunk(t.drop(`\r\n\r\n`.size))) ++ next))
           }
       }
     }
 
-    go(_, ByteVector.empty)
+    go(_, ByteVector.empty).stream
   }
 
 
@@ -119,10 +119,11 @@ package object internal {
   }
 
   /** creates a function that lifts supplied socket to secure socket **/
-  def liftToSecure[F[_]](sslStrategy: => Strategy, sslContext: => SSLContext)(socket: Socket[F])(implicit F: Async[F]): F[Socket[F]] = {
-    F.delay { sslContext.createSSLEngine()}.flatMap { jengine =>
-      SSLEngine.client(jengine)(F, sslStrategy).flatMap { engine =>
-        SSLSocket(socket, engine)
+  def liftToSecure[F[_]](sslExecContext: => ExecutionContext, sslContext: => SSLContext)(socket: Socket[F])(implicit F: Effect[F]): F[Socket[F]] = {
+    import cats.syntax.all._
+    F.delay{ sslContext.createSSLEngine() }.flatMap { jengine =>
+      SSLEngine.client(jengine)(F, sslExecContext).flatMap { engine =>
+        SSLSocket(socket, engine)(F, sslExecContext)
       }}
   }
 

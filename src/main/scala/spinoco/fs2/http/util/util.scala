@@ -15,8 +15,8 @@ package object util {
     * @return
     */
   def encodeBase64Raw[F[_]](alphabet:Base64Alphabet):Pipe[F, Byte, Byte] = {
-    def go(rem:ByteVector):Handle[F,Byte] => Pull[F, Byte, Unit] = {
-      _.receiveOption {
+    def go(rem:ByteVector): Stream[F,Byte] => Pull[F, Byte, Unit] = {
+      _.pull.unconsChunk.flatMap {
         case None =>
           if (rem.size == 0) Pull.done
           else Pull.output(ByteVectorChunk(ByteVector.view(rem.toBase64(alphabet).getBytes)))
@@ -37,11 +37,9 @@ package object util {
           } else {
             go(n)(h)
           }
-
       }
-
     }
-    _.pull(go(ByteVector.empty))
+    go(ByteVector.empty)(_).stream
   }
 
   /** encodes base64 encoded stream [[http://tools.ietf.org/html/rfc4648#section-5 RF4648 section 5]]. Whitespaces are ignored **/
@@ -59,8 +57,8 @@ package object util {
     */
   def decodeBase64Raw[F[_]](alphabet:Base64Alphabet):Pipe[F, Byte, Byte] = {
     val Pad = alphabet.pad
-    def go(remAcc:BitVector):Handle[F, Byte] => Pull[F, Byte, Unit] = {
-      _.receiveOption {
+    def go(remAcc:BitVector):Stream[F, Byte] => Pull[F, Byte, Unit] = {
+      _.pull.unconsChunk.flatMap {
         case None => Pull.done
 
         case Some((chunk,h)) =>
@@ -95,7 +93,7 @@ package object util {
           }
       }
     }
-    _.pull(go(BitVector.empty))
+    go(BitVector.empty)(_).stream
   }
 
   /** decodes base64 encoded stream [[http://tools.ietf.org/html/rfc4648#section-5 RF4648 section 5]]. Whitespaces are ignored **/

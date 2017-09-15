@@ -31,15 +31,14 @@ lazy val commonSettings = Seq(
      , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
      , "com.spinoco" %% "protocol-http" % "0.1.8"
      , "com.spinoco" %% "protocol-websocket" % "0.1.8"
-     , "co.fs2" %% "fs2-core" % "0.9.5"
-     , "co.fs2" %% "fs2-io" % "0.9.5"
+     , "co.fs2" %% "fs2-core" % "0.10.0-M6"
+     , "co.fs2" %% "fs2-io" % "0.10.0-M6"
    ),
    scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-http"), "git@github.com:Spinoco/fs2-http.git")),
    homepage := None,
    licenses += ("MIT", url("http://opensource.org/licenses/MIT")),
    initialCommands := s"""
    import fs2._
-   import fs2.util.syntax._
    import spinoco.fs2.http
    import http.Resources._
    import spinoco.protocol.http.header._

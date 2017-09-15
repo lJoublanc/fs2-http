@@ -1,7 +1,7 @@
 package spinoco.fs2.http.routing
 
 import fs2._
-import fs2.util._
+import cats.effect.Sync
 import shapeless.ops.function.FnToProduct
 import shapeless.ops.hlist.Prepend
 import shapeless.{::, HList, HNil}
@@ -10,7 +10,7 @@ import spinoco.fs2.http.routing.MatchResult.{Failed, Success}
 import spinoco.protocol.http.{HttpRequestHeader, HttpStatusCode, Uri}
 
 
-sealed trait Matcher[+F[_], +A] { self =>
+sealed trait Matcher[F[_], A] { self =>
   import MatchResult._
   import Matcher._
 
@@ -23,71 +23,75 @@ sealed trait Matcher[+F[_], +A] { self =>
   def *>[B](b: B): Matcher[F, B] =
     self.map { _ => b }
 
-
   /** like `map` but allows to evaluate `F` **/
-  def evalMap[F0[_],Lub[_], B](f: A => F0[B])(implicit L: Lub1[F,F0,Lub]): Matcher[Lub, B] =
+  def evalMap[B](f: A => F[B]): Matcher[F, B] =
     self.flatMap { a => Eval(f(a)) }
 
-
   /** transforms this matcher to another matcher with supplied `f` **/
-  def flatMap[F0[_],Lub[_], B](f: A => Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]):  Matcher[Lub, B]  =
-    Bind[Lub, A, B](self.asInstanceOf[Matcher[Lub, A]], {
-      case success:Success[A]  => f(success.result).asInstanceOf[Matcher[Lub, B]]
-      case failed:Failed[Lub] => Matcher.respond[Lub](failed.response)
+  def flatMap[B](f: A => Matcher[F, B]):  Matcher[F, B]  =
+    Bind[F, A, B](self.covaryValue[A], {
+      case success:Success[A]  => f(success.result).covaryValue[B]
+      case failed:Failed[F] => Matcher.respond[F](failed.response).covaryValue[B]
     })
 
   /** allias for flatMap **/
-  def >>=[F0[_],Lub[_], B](f: A => Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]):  Matcher[Lub, B]  =
+  def >>=[B](f: A => Matcher[F, B]):  Matcher[F, B]  =
     flatMap(f)
 
   /** defined as flatMap { _ => fb } **/
-  def >>[F0[_],Lub[_], B](fb: Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]):  Matcher[Lub, B]  =
+  def >>[B](fb: Matcher[F, B]):  Matcher[F, B]  =
     flatMap(_ => fb)
 
   /** defined as flatMap { a => fb map { _ => a} } **/
-  def <<[F0[_],Lub[_], B](fb: Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]):  Matcher[Lub, A]  =
+  def <<[B](fb: Matcher[F, B]):  Matcher[F, A]  =
     flatMap(a => fb map { _ => a})
 
   /** defined as advance.flatMap(f) **/
-  def />>=[F0[_],Lub[_], B](f: A => Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]):  Matcher[Lub, B]  =
+  def />>=[B](f: A => Matcher[F, B]):  Matcher[F, B]  =
     self.advance.flatMap(f)
 
   /** advances path by one segment, after this matches **/
   def advance: Matcher[F, A] =
     Advance(self)
 
-
   /** like flatMap, but allows to apply `f` when match failed **/
-  def flatMapR[F0[_],Lub[_], B](f: MatchResult[Lub,A] => Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]):  Matcher[Lub, B]  =
-    Bind[Lub, A, B](self.asInstanceOf[Matcher[Lub, A]], f andThen (_.asInstanceOf[Matcher[Lub,B]]))
+  def flatMapR[B](f: MatchResult[F,A] => Matcher[F, B]):  Matcher[F, B]  =
+    Bind[F, A, B](self, f andThen (_.covaryValue[B]))
 
   /** applies `f` only when matcher fails to match **/
-  def recover[F0[_], Lub[_], A0 >: A](f: HttpResponse[Lub] => Matcher[F0, A0])(implicit R: RealSupertype[A, A0], L: Lub1[F,F0,Lub]):  Matcher[Lub, A0] =
-    Bind[Lub, A, A0](self.asInstanceOf[Matcher[Lub, A]], {
-      case success: Success[A]  => Matcher.success(success.result.asInstanceOf[A0])
-      case failed: Failed[Lub] =>  f(failed.response).asInstanceOf[Matcher[Lub, A0]]
+  def recover[F0[x] >: F[x], A0 >: A](f: HttpResponse[F0] => Matcher[F0, A0]):  Matcher[F0, A0] =
+    Bind[F0, A, A0](self.covary[F0], {
+      case success: Success[A]  => Matcher.success(success.result).covaryAll[F0,A0]
+      case failed: Failed[F0] =>  f(failed.response).covaryAll[F0,A0]
     })
 
   /** matches and consumes current path segment throwing away `A` **/
-  def / [F0[_],Lub[_], B](other : Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]): Matcher[Lub, B] =
+  def / [B](other : Matcher[F, B]): Matcher[F, B] =
     self.advance.flatMap { _ => other }
 
   /** matches and consumes current path segment throwing away `B` **/
-  def </[F0[_],Lub[_], B](other:  Matcher[F0, B])(implicit L: Lub1[F,F0,Lub]):  Matcher[Lub, A] =
+  def </[B](other:  Matcher[F, B]):  Matcher[F, A] =
     self.advance.flatMap { a => other.map { _ => a } }
 
   /** matches this or alternative **/
-  def or[F0[_],Lub[_], A0 >: A](alt : => Matcher[F0, A0])(implicit R: RealSupertype[A, A0], L: Lub1[F,F0,Lub]): Matcher[Lub, A0] =
-    Bind[Lub, A, A0](self.asInstanceOf[Matcher[Lub, A]], {
+  def or[A0 >: A](alt : => Matcher[F, A0]): Matcher[F, A0] =
+    Bind[F, A, A0](self.asInstanceOf[Matcher[F, A]], {
       case success: Success[A] => Matcher.ofResult(success)
-      case failed: Failed[Lub] => alt.asInstanceOf[Matcher[Lub, A0]]
+      case failed: Failed[F] => alt
     })
 
   /** matches this or yields to None **/
   def ? : Matcher[F, Option[A]] =
-    self.map(Some(_)) or Matcher.success(None: Option[A])
+    self.map(Some(_)) or Matcher.success(None: Option[A]).covary[F]
 
+  /** Safely covaries the effect type, to turn a pure Matcher into an effectful one*/
+  protected[routing] def covary[F0[x] >: F[x]] : Matcher[F0,A] = self.asInstanceOf[Matcher[F0,A]]
 
+  /** Safely covaries the value type */
+  protected[routing] def covaryValue[B >: A] : Matcher[F,B] = self.asInstanceOf[Matcher[F,B]]
+
+  /** Safely covaries the effect and return type, to turn a pure Matcher into an effectful one*/
+  protected[routing] def covaryAll[F0[x] >: F[x],B >: A] : Matcher[F0,B] = self.asInstanceOf[Matcher[F0,B]]
 }
 
 
@@ -109,7 +113,7 @@ object Matcher {
 
   /** matcher that always responds with supplied status code **/
   def respondWith(code: HttpStatusCode): Matcher[Nothing, Nothing] =
-    respond(HttpResponse(code))
+    respond[Nothing](HttpResponse[Nothing](code))
 
   /** Matcher that always results in result supplied**/
   def ofResult[F[_], A](result:MatchResult[F,A]): Matcher[F, A] =
@@ -118,7 +122,7 @@ object Matcher {
   /**
     * Interprets matcher to obtain the result.
     */
-  def run[F[_], A](matcher: Matcher[F, A])(header: HttpRequestHeader, body: Stream[F, Byte])(implicit F: Suspendable[F]): F[MatchResult[F, A]] = {
+  def run[F[_], A](matcher: Matcher[F, A])(header: HttpRequestHeader, body: Stream[F, Byte])(implicit F: Sync[F]): F[MatchResult[F, A]] = {
     def go[B](current:Matcher[F,B], path: Uri.Path):F[(MatchResult[F, B], Uri.Path)] = {
       current match {
         case m: Match[F,B] => F.map(F.pure(m.f(header.copy(path = path), body))) { _ -> path }

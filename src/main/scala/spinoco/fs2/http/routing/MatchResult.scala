@@ -1,6 +1,6 @@
+
 package spinoco.fs2.http.routing
 
-import fs2.util.Lub1
 import spinoco.fs2.http.HttpResponse
 import spinoco.protocol.http.HttpStatusCode
 
@@ -20,7 +20,7 @@ trait MatchResult[+F[_],+A] { self =>
 
   def isFailure: Boolean = ! isSuccess
 
-  def fold[Lub[_], F0[_], B](fa: HttpResponse[F0] => B, fb: A => B)(implicit L: Lub1[F,F0,Lub]):B = self match {
+  def fold[F0[_], B](fa: HttpResponse[F0] => B, fb: A => B):B = self match {
     case Success(a) => fb(a)
     case Failed(resp) => fa(resp.asInstanceOf[HttpResponse[F0]])
   }

@@ -6,18 +6,24 @@ import fs2.Chunk
 import scala.reflect.{ClassTag, classTag}
 import scodec.bits.ByteVector
 
+import scala.reflect.ClassTag
+
 // in fs2 1.0 release this will be replaced by scodec.interop
 final class ByteVectorChunk private (val toByteVector: ByteVector)
   extends Chunk[Byte] {
   def apply(i: Int): Byte =
     toByteVector(i)
 
-  def copyToArray[B >: Byte](xs: Array[B], start: Int): Unit =
+  protected def mapStrict[O2](f: Byte => O2): fs2.Chunk[O2] = ???
+
+  protected def splitAtChunk_(n: Int): (fs2.Chunk[Byte], fs2.Chunk[Byte]) = ???
+
+  def copyToArray[B >: Byte : ClassTag](xs: Array[B], start: Int): Unit =
     xs match {
       case byteArray: Array[Byte] =>
         toByteVector.copyToArray(byteArray, start)
       case _ =>
-        iterator.copyToArray(xs, start)
+        ???
     }
 
   def drop(n: Int): Chunk[Byte] =

@@ -49,48 +49,38 @@ object SSEEncoding {
     */
   def decode[F[_]]: Pipe[F, Byte, SSEMessage] = {
 
-    // drops initial Byte Order Mark, if present
+    /** Drops initial Byte Order Mark, if present */
     def dropInitial(buff:ByteVector): Pipe[F, Byte, Byte] = {
-      _.uncons.flatMap {
-        case None => Stream.fail(new Throwable("SSE Socket did not contain any data"))
-        case Some((chunk, next)) =>
-          val all = buff ++ chunk2ByteVector(chunk)
-          if (all.size < 2) next through dropInitial(all)
-          else {
-            if (all.startsWith(StartBom)) Stream.chunk(ByteVectorChunk(all.drop(2))) ++ next
-            else Stream.chunk(ByteVectorChunk(all)) ++ next
-          }
-      }
+      _.pull.unconsN(n=2,allowFewer=false).flatMap{
+        case None => Pull.fail(new Throwable("SSE Socket did not contain any data"))
+        case Some((firstTwoBytes, next)) =>
+          val firstChunk = firstTwoBytes.toChunk
+          if (chunk2ByteVector(firstChunk) == StartBom) next.pull.echo
+          else Pull.output(firstChunk) >> next.pull.echo
+      }.stream
     }
 
-    // makes lines out of incoming bytes. Lines are utf-8 decoded
-    // separated by \r\n or \n or \r
+    /** Makes lines out of incoming bytes. Lines are utf-8 decoded * separated by \r\n or \n or \r */
     def mkLines: Pipe[F, Byte, String] =
       _ through text.utf8Decode[F] through text.lines[F]
 
 
-    // makes lines for single event
-    // removes all the comments and splits by empty lines
-    // outgoing vectors are guaranteed tobe nonEmpty
-    // note that this splits by empty lines.
-    // the last event is emitted only if it is terminated by empty line
+    /** Makes lines for single event
+      * Removes all the comments and splits by empty lines
+      * Outgoing vectors are guaranteed to be nonEmpty
+      * Note that this splits by empty lines.
+      * The last event is emitted only if it is terminated by empty line
+      */
     def mkEvents: Pipe[F, String, Seq[String]] = {
-      def go(buff: Vector[String]): Handle[F, String] => Pull[F, Seq[String], Unit] = {
-        _ receive  { case (lines, h) =>
-            val event = lines.toList.takeWhile(_.nonEmpty)
-            if (event.size == lines.size) go(buff)(h)
-            else Pull.output1(event) >> go(Vector.empty)(h.push(lines.drop(event.size + 1)))
-        }
-      }
-
-      _ filter(! _.startsWith(":")) pull go(Vector.empty)
+      _.filter(! _.startsWith(":")).split(_.isEmpty).map(_.toChunk.toList)
     }
 
 
 
-    // constructs SSE Message
-    // if message contains "retry" separate retry event is emitted
-    // im message contains multiple "event" or "id" values, only last one is used.
+    /** Constructs SSE Message
+      * If message contains "retry" separate retry event is emitted
+      * If message contains multiple "event" or "id" values, only last one is used.
+      */
     def mkMessage: Pipe[F, Seq[String], SSEMessage] = {
        _.flatMap { lines =>
          val data =

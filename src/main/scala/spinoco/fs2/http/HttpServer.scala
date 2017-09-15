@@ -4,12 +4,14 @@ import java.net.InetSocketAddress
 import java.nio.channels.AsynchronousChannelGroup
 
 import fs2._
-import fs2.util.Async
+import cats.effect.Effect
 import scodec.Codec
 import spinoco.protocol.http.codec.{HttpRequestHeaderCodec, HttpResponseHeaderCodec}
 import spinoco.protocol.http.{HttpRequestHeader, HttpResponseHeader, HttpStatusCode}
+import spinoco.fs2.http.internal.readWithTimeout
 
 import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext
 
 
 object HttpServer {
@@ -44,17 +46,17 @@ object HttpServer {
   )(
     implicit
     AG: AsynchronousChannelGroup
-    , F: Async[F]
+    , F: Effect[F]
+    , ioEC : ExecutionContext
   ):Stream[F,Unit] = {
-    import Stream._
-    import internal._
     val (initial, readDuration) = requestHeaderReceiveTimeout match {
       case fin: FiniteDuration => (true, fin)
       case _ => (false, 0.millis)
     }
 
-    concurrent.join(maxConcurrent)(
-      io.tcp.server(bindTo, receiveBufferSize = receiveBufferSize).map { _.flatMap { socket =>
+    io.tcp.server(bindTo, receiveBufferSize = receiveBufferSize).map { 
+      _.flatMap { socket =>
+        import Stream._
         eval(async.signalOf(initial)).flatMap { timeoutSignal =>
           readWithTimeout[F](socket, readDuration, timeoutSignal.get, receiveBufferSize)
           .through(HttpRequest.fromStream(maxHeaderSize, requestCodec))
@@ -77,16 +79,15 @@ object HttpServer {
           }
           .drain
         }
-      }}
-    )
-
+      }
+    }.join(maxConcurrent)
   }
 
   /** default handler for parsing request errors **/
-  def handleRequestParseError[F[_]](err: Throwable): Stream[F, HttpResponse[F]] = {
+  def handleRequestParseError(err: Throwable): Stream[Pure, HttpResponse[Nothing]] = { //FIXME : should this be Pure?
     Stream.suspend {
       err.printStackTrace()
-      Stream.emit(HttpResponse(HttpStatusCode.BadRequest))
+      Stream.emit(HttpResponse[Nothing](HttpStatusCode.BadRequest))
     }
   }
 

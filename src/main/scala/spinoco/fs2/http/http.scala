@@ -3,14 +3,16 @@ package spinoco.fs2
 import java.net.InetSocketAddress
 import java.nio.channels.AsynchronousChannelGroup
 import javax.net.ssl.SSLContext
+import java.util.concurrent.Executors
 
-import fs2.{Strategy, Stream}
-import fs2.util._
+import fs2.Stream
+import cats.effect.Effect
 import scodec.Codec
 import spinoco.protocol.http.{HttpRequestHeader, HttpResponseHeader}
 import spinoco.protocol.http.codec.{HttpRequestHeaderCodec, HttpResponseHeaderCodec}
 
 import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext
 
 
 package object http {
@@ -37,14 +39,15 @@ package object http {
      , requestHeaderReceiveTimeout: Duration = 5.seconds
      , requestCodec: Codec[HttpRequestHeader] = HttpRequestHeaderCodec.defaultCodec
      , responseCodec: Codec[HttpResponseHeader] = HttpResponseHeaderCodec.defaultCodec
-     , requestFailure : Throwable => Stream[F, HttpResponse[F]] = HttpServer.handleRequestParseError[F] _
+     , requestFailure : Throwable => Stream[F, HttpResponse[F]] = HttpServer.handleRequestParseError _
      , sendFailure: (Option[HttpRequestHeader], HttpResponse[F], Throwable) => Stream[F, Nothing] = HttpServer.handleSendFailure[F] _
    )(
      service:  (HttpRequestHeader, Stream[F,Byte]) => Stream[F,HttpResponse[F]]
    )(
      implicit
      AG: AsynchronousChannelGroup
-     , F: Async[F]
+     , F: Effect[F]
+     , ioEC : ExecutionContext
    ):Stream[F,Unit] = HttpServer(
     maxConcurrent = maxConcurrent
     , receiveBufferSize = receiveBufferSize
@@ -64,14 +67,14 @@ package object http {
     *
     * @param requestCodec    Codec used to decode request header
     * @param responseCodec   Codec used to encode response header
-    * @param sslStrategy     Strategy used to perform blocking SSL operations
+    * @param sslExecContext  Execution context used to perform blocking SSL operations
     */
   def client[F[_]](
    requestCodec: Codec[HttpRequestHeader] = HttpRequestHeaderCodec.defaultCodec
    , responseCodec: Codec[HttpResponseHeader] = HttpResponseHeaderCodec.defaultCodec
-   , sslStrategy: => Strategy = Strategy.fromCachedDaemonPool("fs2-http-ssl")
+   , sslExecContext: => ExecutionContext = ExecutionContext.fromExecutor(Executors.newCachedThreadPool())
    , sslContext: => SSLContext = { val ctx = SSLContext.getInstance("TLS"); ctx.init(null,null,null); ctx }
-  )(implicit AG: AsynchronousChannelGroup, F: Async[F]):F[HttpClient[F]] =
-    HttpClient(requestCodec, responseCodec, sslStrategy, sslContext)
+  )(implicit AG: AsynchronousChannelGroup, F: Effect[F], ec : ExecutionContext):F[HttpClient[F]] =
+    HttpClient(requestCodec, responseCodec, sslExecContext, sslContext)
 
 }
